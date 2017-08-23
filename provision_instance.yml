@@ -1,0 +1,83 @@
+# provision_instance.yml
+
+- name: launch aws instances 
+  hosts: localhost
+  connection: local
+  gather_facts: False
+  vars:
+    key_name: krb-ec2
+    instance_type: t2.micro
+    security_group: ssh
+    image: ami-cd0f5cb6
+    region: us-east-1
+
+  tasks:
+    - name: provision an instance
+      ec2:
+        key_name: "{{ key_name }}"
+        instance_type: "{{ instance_type }}"
+        group: "{{ security_group }}"
+        image: "{{ image }}"
+        region: "{{ region }}"
+        wait: yes
+        vpc_subnet_id: subnet-09e75a41
+        assign_public_ip: yes
+        instance_tags:
+          Name: test-server
+      register: ec2
+
+    - name: add instance to host group
+      add_host:
+        hostname: "{{ item.public_ip }}"
+        groupname: launched
+      with_items: "{{ ec2.instances }}"
+
+    - name: wait for SSH
+      wait_for:
+        host: "{{ item.public_dns_name }}"
+        port: 22
+        delay: 60
+        timeout: 300
+        state: started
+      with_items: "{{ ec2.instances}}"
+    
+- name: bootstrap launched instances
+  hosts: launched
+  become: yes
+  gather_facts: False
+  tasks:
+    - name: bootstrap python
+      raw: sudo apt -y update && sudo apt install -y python-minimal
+
+- name: modify launched instances 
+  hosts: launched
+  become: yes
+  gather_facts: True
+  tasks:
+    - name: change hostname
+      hostname:
+        name: codetest
+    
+    - name: set timezone
+      timezone:
+        name: America/New_York
+
+- name: install docker and docker-compose
+  hosts: launched
+  become: yes
+  gather_facts: True
+  tasks:
+    - name: add docker repo key
+      raw: curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo apt-key add -
+    
+    - name: update apt
+      raw: sudo add-apt-repository "deb [arch=amd64] https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable"
+    
+    - name: install docker
+      apt: pkg=docker-ce update_cache=yes
+      
+    - name: install pip
+      apt: pkg=python-pip
+
+    - name: install docker-compose
+      raw: sudo pip install docker-compose
